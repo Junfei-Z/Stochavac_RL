@@ -17,7 +17,7 @@ We formulate vaccine allocation as a **stochastic optimal control problem** over
 ## 📁 Project Structure
 
 ```plaintext
-epidemic_rl/
+Stochavac-RL/
 ├── config.py              # Global configuration and hyperparameters
 ├── graph_model.py         # Generates heterogeneous contact network with groups and individual properties
 ├── epidemic_env.py        # Simulation environment with CTMP-based epidemic dynamics
