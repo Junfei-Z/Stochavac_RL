@@ -15,4 +15,13 @@ This repository provides a minimal and extensible framework for simulating vacci
 We formulate vaccine allocation as a **stochastic optimal control problem** over a CTMP defined on a contact graph. The objective is to learn a policy that minimizes cumulative infections or deaths by dynamically selecting individuals for vaccination under limited capacity.
 
 ## 🧪 Project Structure
+epidemic_rl/
+├── config.py              # Global configuration and hyperparameters
+├── graph_model.py         # Generates heterogeneous contact network with groups and individual properties
+├── epidemic_env.py        # Simulation environment with CTMP-based epidemic dynamics
+├── policy_baseline.py     # Heuristic or ODE-based baseline vaccination policy
+├── rl_agent.py            # Reinforcement learning logic (e.g., PPO, REINFORCE)
+├── simulator.py           # Evaluation and rollout utilities
+├── main.py                # Main script to run training, evaluation, or simulation
+└── utils.py               # Helper functions: reward computation, logging, metrics, etc.
 
