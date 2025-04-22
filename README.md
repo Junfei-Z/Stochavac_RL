@@ -14,7 +14,9 @@ This repository provides a minimal and extensible framework for simulating vacci
 
 We formulate vaccine allocation as a **stochastic optimal control problem** over a CTMP defined on a contact graph. The objective is to learn a policy that minimizes cumulative infections or deaths by dynamically selecting individuals for vaccination under limited capacity.
 
-## 🧪 Project Structure
+## 📁 Project Structure
+
+```plaintext
 epidemic_rl/
 ├── config.py              # Global configuration and hyperparameters
 ├── graph_model.py         # Generates heterogeneous contact network with groups and individual properties
