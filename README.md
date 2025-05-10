@@ -26,6 +26,10 @@ Stochavac-RL/
 ├── simulator.py           # Evaluation and rollout utilities
 ├── main.py                # Main script to run training, evaluation, or simulation
 └── utils.py               # Helper functions: reward computation, logging, metrics, etc.
+```
+
+
+
 
 ## 💡 Idea
 - https://openreview.net/pdf?id=S5Yo6w3n3f - a kind of interesting combination with neural ode and refinforcement learning(for smooth controlloing ) , maybe can be used here
