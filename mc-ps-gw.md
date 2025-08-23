@@ -63,22 +63,22 @@ function MC_PSGW_with_Matching(Dist_A, Dist_B, k):
 
 # --- 步骤 1: 初始化与设置 ---
 
-# 1a. 准备数据
-# SourceData: {A_i} on Manifold M₁
-# TargetData: {B_j} on Manifold M₂
+    # 1a. 准备数据
+    # SourceData: {A_i} on Manifold M₁
+    # TargetData: {B_j} on Manifold M₂
+    
+    # 1b. 构建流形到流形的生成器网络 G: M₁ -> M₂
+    # 逻辑: 网络的每一层都需要被设计成“流形感知”的，以保证输入输出都在正确的流形上。
+    # 参考: 构建这类网络层的思想和工具，如对数-线性-指数模式(Log-Linear-Exp)和
+    #      流形上的梯度更新方法，主要借鉴自
+    #      《Hyperbolic Neural Networks》 和
+    #      《HYPERBOLIC NEURAL NETWORKS++》。
+    Generator_G = ManifoldAwareGenerator(input_manifold=M₁, output_manifold=M₂)
 
-# 1b. 构建流形到流形的生成器网络 G: M₁ -> M₂
-# 逻辑: 网络的每一层都需要被设计成“流形感知”的，以保证输入输出都在正确的流形上。
-# 参考: 构建这类网络层的思想和工具，如对数-线性-指数模式(Log-Linear-Exp)和
-#      流形上的梯度更新方法，主要借鉴自
-#      《Hyperbolic Neural Networks》 和
-#      《HYPERBOLIC NEURAL NETWORKS++》。
-Generator_G = ManifoldAwareGenerator(input_manifold=M₁, output_manifold=M₂)
-
-# 1c. 设置超参数
-# k: MC-PS-GW使用的主成分数量
-# learning_rate, num_epochs, batch_size...
-Optimizer = Adam(Generator_G.parameters(), lr=learning_rate)
+    # 1c. 设置超参数
+    # k: MC-PS-GW使用的主成分数量
+    # learning_rate, num_epochs, batch_size...
+    Optimizer = Adam(Generator_G.parameters(), lr=learning_rate)
 
 # --- 步骤 2: 训练循环 (The Flow) ---
 
