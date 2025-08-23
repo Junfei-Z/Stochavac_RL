@@ -105,4 +105,4 @@ for epoch in 1 to num_epochs:
     Optimizer.step()
 
 # --- 步骤 3: 训练完成 ---
-# 最终得到的 Generator_G 就是我们想要的从 M₁ 到 M₂ 的映射模型。
+    # 最终得到的 Generator_G 就是我们想要的从 M₁ 到 M₂ 的映射模型。
