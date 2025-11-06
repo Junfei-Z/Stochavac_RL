@@ -1,0 +1,47 @@
+======================================================================
+QUICK DEMO: Vaccine Allocation with Diffusion + RL
+======================================================================
+
+This demo runs a scaled-down version:
+- 50 expert trajectories (vs 1000 full)
+- 25 micro trajectories (vs 500 full)
+- 20 PPO iterations (vs 200 full)
+- 500 individuals (vs 2000 full)
+
+Estimated time: 20-30 minutes
+======================================================================
+
+
+[1/3] Generating 50 expert trajectories...
+  Generated 10/50 trajectories
+  Generated 20/50 trajectories
+  Generated 30/50 trajectories
+  Generated 40/50 trajectories
+  Generated 50/50 trajectories
+✓ Saved 50 trajectories
+
+[2/3] Replaying 25 trajectories to micro-level...
+  Replayed 5/25 trajectories
+  Replayed 10/25 trajectories
+  Replayed 15/25 trajectories
+  Replayed 20/25 trajectories
+  Replayed 25/25 trajectories
+✓ Saved 25 micro trajectories
+
+[3/3] Training diffusion model and PPO (20 iterations)...
+Loaded 1250 transitions
+
+Training diffusion model...
+  Epoch 5/20: loss=0.0108
+  Epoch 10/20: loss=0.0054
+  Epoch 15/20: loss=0.0027
+  Epoch 20/20: loss=0.0092
+✓ Diffusion model trained
+
+Training PPO variants...
+  Training RL-only...
+    Iter 5: reward=-130.0
+    Iter 10: reward=-108.0
+    Iter 15: reward=-1179.0
+    Iter 20: reward=-366.0
+  Training BC+RL...
