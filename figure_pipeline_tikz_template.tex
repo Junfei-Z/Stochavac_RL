@@ -1,0 +1,128 @@
+\begin{figure*}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+    % Define styles
+    stage/.style={
+        rectangle, rounded corners=3mm, draw=black!60, thick,
+        minimum width=5.5cm, minimum height=6cm,
+        drop shadow, font=\sffamily
+    },
+    stagebox/.style={
+        rectangle, rounded corners=2mm, draw=black!40,
+        minimum width=4.5cm, minimum height=1.5cm,
+        font=\footnotesize\sffamily
+    },
+    arrow/.style={->, >=stealth, line width=1.5pt},
+    dataarrow/.style={->, >=stealth, line width=1.2pt, dashed},
+    label/.style={font=\footnotesize\sffamily, align=center},
+    badge/.style={rectangle, rounded corners=1mm, draw, fill=black!10,
+                  font=\tiny\ttfamily, inner sep=2pt}
+]
+
+% ==================== STAGE 1: ODE EXPERT ====================
+\node[stage, fill=green!10] (m1) at (0,0) {};
+\node[anchor=north, font=\large\bfseries\sffamily] at (m1.north) [yshift=-3mm]
+    {\textcolor{green!50!black}{M1: ODE Expert Generation}};
+
+% M1 components
+\node[stagebox, fill=green!5] (m1-input) at ($(m1.north)+(0,-1.5)$)
+    {Population Groups\\$g \in \{1,2,3\}$\\Contact Matrix $\mathbf{C}$};
+
+\node[stagebox, fill=green!5] (m1-process) at ($(m1-input)+(0,-2)$)
+    {ODE Solver\\$\frac{dS_g}{dt} = -\lambda_g S_g - u_g S_g$\\Optimal Control};
+
+\node[stagebox, fill=green!5] (m1-output) at ($(m1-process)+(0,-2)$)
+    {Expert Trajectories\\$\{\tau_{\text{macro}}^{(k)}\}_{k=1}^{1000}$};
+
+\node[badge] at ($(m1.south)+(0,0.3)$) {Tractable: 30D, deterministic};
+
+\draw[arrow, green!70!black] (m1-input) -- (m1-process);
+\draw[arrow, green!70!black] (m1-process) -- (m1-output);
+
+% ==================== STAGE 2: DIFFUSION ====================
+\node[stage, fill=blue!10, right=1.5cm of m1] (m2) {};
+\node[anchor=north, font=\large\bfseries\sffamily] at (m2.north) [yshift=-3mm]
+    {\textcolor{blue!50!black}{M2: Diffusion Prior Learning}};
+
+% M2 components
+\node[stagebox, fill=blue!5] (m2-lift) at ($(m2.north)+(0,-1.5)$)
+    {Macro→Micro Lifting\\$w_i = 0.6 \cdot k_i + 0.4 \cdot r_i$};
+
+\node[stagebox, fill=blue!5] (m2-diff) at ($(m2-lift)+(0,-2)$)
+    {Diffusion Training\\Transformer ($T=1000$)\\$\mathcal{L} = \mathbb{E}[\|\epsilon - \epsilon_\theta\|^2]$};
+
+\node[stagebox, fill=blue!5] (m2-output) at ($(m2-diff)+(0,-2)$)
+    {Diffusion Prior\\$p_\theta(a \mid s)$};
+
+\node[badge] at ($(m2.south)+(0,0.3)$) {Learning: Transform macro→micro};
+
+\draw[arrow, blue!70!black] (m2-lift) -- (m2-diff);
+\draw[arrow, blue!70!black] (m2-diff) -- (m2-output);
+
+% ==================== STAGE 3: RL ====================
+\node[stage, fill=orange!10, right=1.5cm of m2] (m3) {};
+\node[anchor=north, font=\large\bfseries\sffamily] at (m3.north) [yshift=-3mm]
+    {\textcolor{orange!50!black}{M3: Prior-Guided RL}};
+
+% M3 components
+\node[stagebox, fill=orange!5] (m3-env) at ($(m3.north)+(0,-1.5)$)
+    {CTMP Environment\\Network: $N=2000$\\States: $6^N$};
+
+\node[stagebox, fill=orange!5] (m3-agent) at ($(m3-env)+(0,-2)$)
+    {PPO Agent $\pi_\phi$\\$\mathcal{L}_{\text{PPO}} + \textcolor{blue!70!black}{\beta \cdot D_{\text{KL}}(\pi_\phi \| p_\theta)}$};
+
+\node[stagebox, fill=orange!5] (m3-output) at ($(m3-agent)+(0,-2)$)
+    {Optimized Policy\\$\pi^*_\phi(a \mid s)$};
+
+\node[badge] at ($(m3.south)+(0,0.3)$) {Stochastic: 12000D, 2× faster};
+
+\draw[arrow, orange!70!black] (m3-env) -- (m3-agent);
+\draw[arrow, orange!70!black] (m3-agent) -- (m3-output);
+
+% ==================== CONNECTIONS ====================
+% M1 → M2
+\draw[arrow, black!60, line width=1.5pt] (m1.east) -- (m2.west)
+    node[midway, above, label] {1000 macro\\trajectories};
+
+% M2 → M3 (two paths)
+% Path 1: Expert data
+\draw[arrow, black!60, line width=1.2pt] ($(m2.east)+(0,0.3)$) -- ($(m3.west)+(0,0.3)$)
+    node[midway, above, label, yshift=2mm] {Lifted data $\mathcal{D}$};
+
+% Path 2: Prior (blue dashed) - this is the key innovation
+\draw[dataarrow, blue!70!black, line width=1.5pt]
+    (m2-output.east) to[out=0, in=180]
+    node[midway, below, label, fill=white, text=blue!70!black]
+        {Prior $p_\theta(a|s)$\\KL regularization}
+    ($(m3-agent.west)+(0,-0.3)$);
+
+% ==================== ANNOTATIONS ====================
+% Top bar showing progression
+\node[above=0.5cm of m1.north, font=\small\sffamily, text=green!50!black]
+    {Deterministic | Low-dim | Fast};
+\node[above=0.5cm of m2.north, font=\small\sffamily, text=blue!50!black]
+    {Learning | Transform | Bridge};
+\node[above=0.5cm of m3.north, font=\small\sffamily, text=orange!50!black]
+    {Stochastic | High-dim | Optimized};
+
+% Callout boxes (optional)
+\node[draw=blue!50!black, fill=blue!5, rounded corners,
+      font=\tiny\sffamily, align=left, text width=3.5cm]
+      at ($(m2.south east)+(0.5,-0.5)$)
+    {\textbf{Key Innovation:}\\Diffusion model learns\\strategy distribution,\\not single policy};
+
+\end{tikzpicture}
+}% end resizebox
+\caption{Three-stage framework for prior-guided reinforcement learning.
+\textbf{(M1)} Population-level ODE simulations generate expert trajectories using
+tractable optimal control methods.
+\textbf{(M2)} A macro-to-micro lifting algorithm maps group-level actions to
+individual allocations, which are used to train a conditional diffusion model
+$p_\theta(a \mid s)$ capturing expert strategy distributions.
+\textbf{(M3)} A PPO agent optimizes individual-level vaccination policies on the
+CTMP environment, regularized by KL divergence to the diffusion prior (blue dashed arrow).
+This hybrid approach combines the theoretical insights of optimal control with the
+scalability of RL, achieving 2× faster convergence than baseline methods.}
+\label{fig:pipeline}
+\end{figure*}
