@@ -1,0 +1,478 @@
+\section{Our Approach: Prior-Guided Reinforcement Learning with Diffusion}
+\label{sec:our_approach}
+
+The optimal control formulation~\eqref{eq:oc_problem} provides a principled objective
+for vaccine allocation on contact networks. However, direct solution via classical
+optimal control methods is computationally intractable due to: (1) the exponentially
+large state space ($6^N$ discrete states for $N$ individuals), (2) stochastic dynamics
+requiring expectations over $2^N$ possible outcomes at each time step, and (3)
+network-coupled transitions that violate the separability assumptions of standard
+algorithms. While population-level ODE models with aggregated compartments can be
+solved efficiently using direct collocation methods~\citep{师兄论文}, our individual-level
+CTMP on networks with $N \sim 10^3$ nodes necessitates approximate solution methods.
+
+We therefore adopt \textbf{reinforcement learning (RL)} to approximate the optimal
+control solution. RL circumvents the computational barriers by: (1) using function
+approximation (neural networks) to represent policies in high dimensions, (2) estimating
+expectations via Monte Carlo sampling from simulated trajectories, and (3) optimizing
+policies directly through gradient-based methods without solving Bellman equations
+globally. However, naïve RL suffers from poor sample efficiency in this high-dimensional,
+long-horizon problem ($N=2000$ individuals, $T=600$ time steps).
+
+Our key insight is to leverage \emph{tractable} population-level optimal control
+solutions as \textbf{priors} to guide individual-level RL. Specifically, we propose
+a three-stage framework (Figure~\ref{fig:pipeline}):
+
+\begin{enumerate}
+    \item \textbf{Macro-level expert generation (M1):} Simulate group-level epidemic
+    dynamics using deterministic ODE models and solve for optimal vaccination strategies
+    using established methods. This produces expert trajectories $\{\tau_{\text{macro}}^{(k)}\}$
+    at the population level.
+
+    \item \textbf{Diffusion prior learning (M2):} Map macro-level actions to individual-level
+    allocations using a degree-risk weighted lifting algorithm, then train a conditional
+    diffusion model $p_\theta(a \mid s)$ to capture the distribution of expert strategies.
+
+    \item \textbf{Prior-guided reinforcement learning (M3):} Train a Proximal Policy
+    Optimization (PPO) agent on the individual-level CTMP environment, regularized by
+    KL divergence to the diffusion prior:
+    \begin{equation}
+    \mathcal{L} = \mathcal{L}_{\text{PPO}}(s,a,A) + \beta(t) \cdot D_{\text{KL}}(\pi_\phi(\cdot|s) \,\|\, p_\theta(\cdot|s)),
+    \label{eq:prior_guided_loss}
+    \end{equation}
+    where $\beta(t)$ decays over training to gradually shift from imitation to optimization.
+\end{enumerate}
+
+This hybrid approach combines the theoretical insights of optimal control (via ODE
+experts) with the scalability of RL (via neural network policies), while using diffusion
+models to bridge the macro-micro gap and improve sample efficiency. We now detail each
+stage.
+
+
+% ============================================
+\subsection{Macro-Level ODE Expert Generation}
+\label{sec:ode_expert}
+
+We begin by generating expert vaccination strategies at the population level using
+the well-established ODE framework for compartmental epidemic models. This provides
+high-quality prior knowledge that would be expensive to discover through exploration
+in the high-dimensional CTMP environment.
+
+\subsubsection{Population-Level ODE Dynamics}
+
+Let $S_g(t), E_g(t), I_g(t), R_g(t), V_g(t), D_g(t)$ denote the population densities
+in each compartment for group $g \in \{1,2,3\}$. The dynamics follow a system of
+ordinary differential equations:
+\begin{align}
+\frac{dS_g}{dt} &= -\lambda_g(t) S_g - u_g(t) S_g, \\
+\frac{dE_g}{dt} &= \lambda_g(t) S_g + (1-\varepsilon_g)\lambda_g(t) V_g - \sigma_g E_g, \\
+\frac{dI_g}{dt} &= \sigma_g E_g - \gamma_g I_g, \\
+\frac{dR_g}{dt} &= \gamma_g(1-\mu_g) I_g, \\
+\frac{dV_g}{dt} &= u_g(t) S_g - (1-\varepsilon_g)\lambda_g(t) V_g, \\
+\frac{dD_g}{dt} &= \gamma_g \mu_g I_g,
+\end{align}
+where the population-level force of infection is given by the mean-field approximation:
+\begin{equation}
+\lambda_g(t) = \beta_g \sum_{h=1}^3 C_{gh} \frac{I_h(t)}{N_h},
+\label{eq:ode_foi}
+\end{equation}
+with $C_{gh}$ denoting the contact matrix between groups and $N_h$ the size of group $h$.
+The control $u_g(t) \in [0,1]$ represents the vaccination rate for group $g$, subject
+to the aggregate constraint:
+\begin{equation}
+\sum_{g=1}^3 u_g(t) S_g(t) \leq V_{\max}.
+\label{eq:ode_constraint}
+\end{equation}
+
+\subsubsection{Expert Strategy Generation}
+
+We generate expert trajectories using three canonical vaccination strategies, which
+represent different policy priorities established in prior work~\citep{师兄论文}:
+
+\begin{itemize}
+    \item \textbf{High-risk priority:} Allocate vaccines sequentially to groups
+    $g=2$ (high-risk), then $g=3$ (high-contact), then $g=1$ (baseline). This
+    strategy prioritizes mortality reduction by protecting vulnerable populations.
+
+    \item \textbf{High-contact priority:} Allocate to groups $g=3, 2, 1$ in order.
+    This strategy prioritizes transmission interruption by vaccinating those with
+    highest contact rates.
+
+    \item \textbf{Uniform allocation:} Distribute vaccines proportionally across
+    all groups according to their susceptible populations.
+\end{itemize}
+
+For each strategy and each random initial condition (varying initial infections,
+network realizations), we simulate the ODE system forward for $T=600$ days. Each
+simulation yields a macro-level trajectory:
+\begin{equation}
+\tau_{\text{macro}}^{(k)} = \left\{
+(S_g^{(k)}(t), E_g^{(k)}(t), I_g^{(k)}(t), R_g^{(k)}(t), V_g^{(k)}(t), D_g^{(k)}(t),
+u_g^{(k)}(t))_{g=1,2,3}
+\right\}_{t=0}^{T-1}.
+\end{equation}
+
+We generate $K=1000$ such expert trajectories (distributed across the three strategies
+and diverse initial conditions) using a modified version of the ProtectorPrevent
+simulator~\citep{protectorprevent}. These trajectories serve as demonstrations of
+effective vaccination policies at the population level, which we will subsequently
+map to the individual level.
+
+
+% ============================================
+\subsection{Macro-to-Micro Lifting Algorithm}
+\label{sec:lifting}
+
+The macro-level expert trajectories $\{\tau_{\text{macro}}^{(k)}\}$ prescribe
+group-level vaccination rates $u_g(t)$ but do not specify \emph{which individuals}
+within each group should be vaccinated. To transfer this knowledge to the individual-level
+CTMP, we require a \textbf{lifting algorithm} that maps group allocations to
+individual probabilities while respecting network structure and feasibility constraints.
+
+\subsubsection{Degree-Risk Weighted Lifting}
+
+Given a macro-level control $U_t = (u_1(t), u_2(t), u_3(t))$ and the current
+individual-level state $s_t = (X_1(t), \ldots, X_N(t))$, we compute individual
+vaccination probabilities $a_t = (a_1(t), \ldots, a_N(t))$ as follows.
+
+\paragraph{Step 1: Compute individual weights.}
+For each susceptible individual $i$ with $X_i(t) = S$ and group label $g_i$, define
+a priority weight combining network centrality and risk:
+\begin{equation}
+w_i = \alpha \cdot \frac{k_i}{\max_j k_j} + (1-\alpha) \cdot \mathbb{I}\{g_i = 2\},
+\label{eq:weight}
+\end{equation}
+where $k_i = |\mathcal{N}(i)|$ is the degree of individual $i$, and $\mathbb{I}\{g_i=2\}$
+is an indicator for the high-risk group. We use $\alpha = 0.6$ to balance network
+effects (degree) with demographic risk. This weighting reflects the principle that
+high-degree individuals act as ``super-spreaders'' in the network, while high-risk
+individuals face greater morbidity and mortality.
+
+\paragraph{Step 2: Within-group normalization.}
+For each group $g$, let $V_g = \{i : X_i(t)=S, g_i=g\}$ denote the set of susceptible
+individuals in group $g$. Normalize the weights within each group:
+\begin{equation}
+\tilde{w}_i = \frac{w_i}{\sum_{j \in V_g} w_j}, \quad \forall i \in V_g.
+\end{equation}
+
+\paragraph{Step 3: Allocate according to macro control.}
+The desired vaccination budget for group $g$ is:
+\begin{equation}
+B_g = u_g(t) \cdot |V_g|.
+\end{equation}
+We distribute this budget among individuals in $V_g$ proportionally to their normalized
+weights:
+\begin{equation}
+a_i^{\text{raw}}(t) = \tilde{w}_i \cdot B_g, \quad \forall i \in V_g.
+\label{eq:raw_action}
+\end{equation}
+
+\paragraph{Step 4: Feasibility projection.}
+The raw actions $a_i^{\text{raw}}$ may violate the global supply constraint
+$\sum_i a_i \leq V_{\max}$. We project onto the feasible set:
+\begin{equation}
+a_i(t) = \min\left(a_i^{\text{raw}}(t), 1\right) \cdot \rho,
+\quad \text{where} \quad
+\rho = \min\left(1, \frac{V_{\max}}{\sum_i a_i^{\text{raw}}(t)}\right).
+\label{eq:projection}
+\end{equation}
+This ensures $a_i(t) \in [0,1]$ and $\sum_i a_i(t) \leq V_{\max}$.
+
+The complete lifting procedure is summarized in Algorithm~\ref{alg:lifting}.
+
+\begin{algorithm}[t]
+\caption{Macro-to-Micro Lifting Algorithm}
+\label{alg:lifting}
+\begin{algorithmic}[1]
+\STATE \textbf{Input:} Macro control $U_t = (u_1, u_2, u_3)$, state $s_t$, graph $\mathcal{G}$, $V_{\max}$
+\STATE \textbf{Output:} Individual actions $a_t = (a_1, \ldots, a_N)$
+\STATE
+\STATE $a_i \gets 0$ for all $i \in V$ \hfill $\triangleright$ Initialize
+\FOR{each group $g \in \{1,2,3\}$}
+    \STATE $V_g \gets \{i : X_i(t)=S, g_i=g\}$ \hfill $\triangleright$ Susceptible in group $g$
+    \IF{$|V_g| = 0$}
+        \STATE \textbf{continue}
+    \ENDIF
+    \STATE
+    \STATE \textcolor{blue}{\# Step 1-2: Compute normalized weights}
+    \FOR{$i \in V_g$}
+        \STATE $w_i \gets 0.6 \cdot k_i / \max_j k_j + 0.4 \cdot \mathbb{I}\{g_i=2\}$
+    \ENDFOR
+    \STATE $\tilde{w}_i \gets w_i / \sum_{j \in V_g} w_j$ for all $i \in V_g$
+    \STATE
+    \STATE \textcolor{blue}{\# Step 3: Allocate budget}
+    \STATE $B_g \gets u_g \cdot |V_g|$
+    \FOR{$i \in V_g$}
+        \STATE $a_i^{\text{raw}} \gets \tilde{w}_i \cdot B_g$
+    \ENDFOR
+\ENDFOR
+\STATE
+\STATE \textcolor{blue}{\# Step 4: Feasibility projection}
+\STATE $\rho \gets \min(1, V_{\max} / \sum_i a_i^{\text{raw}})$
+\FOR{$i \in V$}
+    \STATE $a_i \gets \min(a_i^{\text{raw}}, 1) \cdot \rho$
+\ENDFOR
+\RETURN $a_t = (a_1, \ldots, a_N)$
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Lifted Expert Dataset}
+
+Applying Algorithm~\ref{alg:lifting} to each macro-level expert trajectory
+$\tau_{\text{macro}}^{(k)}$ yields a corresponding individual-level trajectory:
+\begin{equation}
+\tau_{\text{micro}}^{(k)} = \left\{
+(s_t^{(k)}, a_t^{(k)})
+\right\}_{t=0}^{T-1},
+\end{equation}
+where $s_t^{(k)}$ is obtained by simulating the CTMP (Algorithm~1 in Section~3) under
+the lifted actions $a_t^{(k)}$. The collection
+$\mathcal{D} = \{\tau_{\text{micro}}^{(k)}\}_{k=1}^K$ forms a dataset of individual-level
+expert demonstrations, which we use to train the diffusion prior in the next stage.
+
+
+% ============================================
+\subsection{Conditional Diffusion Model for Strategy Prior}
+\label{sec:diffusion}
+
+Rather than using the lifted expert data directly for behavior cloning (which would
+yield a deterministic policy), we train a \textbf{conditional diffusion model} to
+capture the \emph{distribution} of expert strategies. This probabilistic representation
+has two advantages: (1) it provides a smooth prior for KL regularization in RL, and
+(2) it enables sampling diverse strategies that generalize beyond the expert demonstrations.
+
+\subsubsection{Denoising Diffusion Probabilistic Model}
+
+We adopt the Denoising Diffusion Probabilistic Model (DDPM) framework~\citep{ho2020denoising}.
+Let $a \in \mathbb{R}^N$ denote an individual-level action vector (vaccination probabilities).
+The forward diffusion process gradually adds Gaussian noise over $T_{\text{diff}}$ steps:
+\begin{equation}
+q(a^{(1:T_{\text{diff}})} \mid a^{(0)}) = \prod_{t=1}^{T_{\text{diff}}} q(a^{(t)} \mid a^{(t-1)}),
+\quad
+q(a^{(t)} \mid a^{(t-1)}) = \mathcal{N}(a^{(t)}; \sqrt{1-\beta_t} a^{(t-1)}, \beta_t I),
+\end{equation}
+where $\{\beta_t\}$ is a variance schedule (we use $T_{\text{diff}}=1000$ and linear
+schedule $\beta_t \in [10^{-4}, 0.02]$). The reverse process learns to denoise:
+\begin{equation}
+p_\theta(a^{(0:T_{\text{diff}})}) = p(a^{(T_{\text{diff}})}) \prod_{t=1}^{T_{\text{diff}}}
+p_\theta(a^{(t-1)} \mid a^{(t)}),
+\end{equation}
+where $p(a^{(T_{\text{diff}})}) = \mathcal{N}(0, I)$ and the denoising distribution
+is parameterized as:
+\begin{equation}
+p_\theta(a^{(t-1)} \mid a^{(t)}) = \mathcal{N}(a^{(t-1)}; \mu_\theta(a^{(t)}, t), \Sigma_\theta(a^{(t)}, t)).
+\end{equation}
+
+Following~\cite{ho2020denoising}, we use a simplified objective that predicts the
+noise $\epsilon \sim \mathcal{N}(0,I)$ added at each step:
+\begin{equation}
+\mathcal{L}_{\text{diff}} = \mathbb{E}_{a^{(0)} \sim \mathcal{D}, t, \epsilon}
+\left[ \|\epsilon - \epsilon_\theta(a^{(t)}, t, s)\|^2 \right],
+\label{eq:ddpm_loss}
+\end{equation}
+where $a^{(t)} = \sqrt{\bar{\alpha}_t} a^{(0)} + \sqrt{1-\bar{\alpha}_t} \epsilon$
+with $\bar{\alpha}_t = \prod_{i=1}^t (1-\beta_i)$, and $s$ is the epidemic state
+used for conditioning.
+
+\subsubsection{Conditional Architecture}
+
+To condition the diffusion model on the epidemic state $s_t$, we extract a
+$d_{\text{feat}}$-dimensional state feature vector:
+\begin{equation}
+\phi(s_t) = \left(
+\frac{|S_g|}{N_g}, \frac{|E_g|}{N_g}, \frac{|I_g|}{N_g}, \frac{|R_g|}{N_g},
+\frac{|V_g|}{N_g}, \frac{|D_g|}{N_g}
+\right)_{g=1,2,3} \in \mathbb{R}^{18},
+\end{equation}
+where $|S_g| = |\{i : X_i(t)=S, g_i=g\}|$ counts individuals in compartment $S$ and
+group $g$, and similarly for other compartments. We concatenate $\phi(s_t)$ with
+additional features (time step $t/T$, total supply $V_{\max}$) to obtain
+$c_t \in \mathbb{R}^{20}$.
+
+The denoising network $\epsilon_\theta(a^{(t)}, t, c)$ is implemented as a
+Transformer~\citep{vaswani2017attention} with the following components:
+\begin{itemize}
+    \item \textbf{Input embedding:} Project the noisy action $a^{(t)} \in \mathbb{R}^N$
+    to dimension $d_{\text{model}}=128$ via a linear layer.
+
+    \item \textbf{Conditioning:} Inject the state features $c$ and diffusion timestep $t$
+    via sinusoidal positional encoding and addition to the input embedding.
+
+    \item \textbf{Transformer layers:} 4 layers of multi-head self-attention (4 heads)
+    with feedforward dimension 512 and LayerNorm.
+
+    \item \textbf{Output projection:} Map the final hidden states to $\mathbb{R}^N$
+    to predict the noise $\epsilon$.
+\end{itemize}
+
+\subsubsection{Training Procedure}
+
+We train the diffusion model on the lifted expert dataset $\mathcal{D} =
+\{(s_t^{(k)}, a_t^{(k)})\}$ by minimizing the DDPM loss~\eqref{eq:ddpm_loss}. Training
+uses the AdamW optimizer with learning rate $3 \times 10^{-4}$, batch size 128, and
+cosine annealing schedule over 50 epochs. After training, we obtain a conditional
+generative model $p_\theta(a \mid s)$ that can sample vaccination strategies conditioned
+on arbitrary epidemic states.
+
+To use this model as a prior during RL, we evaluate the log-probability
+$\log p_\theta(a \mid s)$ via importance sampling~\citep{song2021scorebased}, which
+allows computing KL divergence for regularization (see Section~\ref{sec:rl}).
+
+
+% ============================================
+\subsection{Prior-Guided Reinforcement Learning}
+\label{sec:rl}
+
+Having constructed a diffusion-based prior $p_\theta(a \mid s)$ that captures expert
+knowledge, we now train a policy $\pi_\phi(a \mid s)$ to optimize the individual-level
+CTMP objective~\eqref{eq:oc_problem} while regularized by this prior. We employ
+Proximal Policy Optimization (PPO)~\citep{schulman2017ppo} with KL regularization.
+
+\subsubsection{Policy and Value Networks}
+
+\paragraph{Policy network $\pi_\phi(a \mid s)$.}
+The policy is parameterized as a Gaussian distribution with state-dependent mean and
+fixed standard deviation:
+\begin{equation}
+\pi_\phi(a \mid s) = \mathcal{N}(a; \mu_\phi(s), \sigma^2 I),
+\end{equation}
+where $\mu_\phi : \mathcal{S} \to \mathbb{R}^N$ is a neural network. The network
+architecture consists of:
+\begin{itemize}
+    \item State encoder: Maps the individual states and graph structure to a
+    $d_{\text{hidden}}=256$-dimensional representation using a 3-layer MLP with
+    group-level aggregation.
+    \item Output head: Projects to $\mathbb{R}^N$ and applies sigmoid activation
+    to ensure $\mu_\phi(s) \in [0,1]^N$.
+\end{itemize}
+We use $\sigma = 0.1$ as a fixed exploration noise level.
+
+\paragraph{Value network $V_\psi(s)$.}
+The baseline for variance reduction in PPO is a learned state-value function
+$V_\psi : \mathcal{S} \to \mathbb{R}$, implemented as a 3-layer MLP with the same
+state encoder as the policy network.
+
+\subsubsection{PPO with KL Regularization}
+
+Standard PPO maximizes the clipped surrogate objective:
+\begin{equation}
+\mathcal{L}_{\text{PPO}}(\phi) = \mathbb{E}_{\tau \sim \pi_{\phi_{\text{old}}}}
+\left[
+\min\left(
+r_t(\phi) \hat{A}_t, \,
+\text{clip}(r_t(\phi), 1-\epsilon, 1+\epsilon) \hat{A}_t
+\right)
+\right],
+\label{eq:ppo_loss}
+\end{equation}
+where $r_t(\phi) = \pi_\phi(a_t \mid s_t) / \pi_{\phi_{\text{old}}}(a_t \mid s_t)$
+is the importance sampling ratio, $\hat{A}_t$ is the generalized advantage estimate
+(GAE)~\citep{schulman2015gae}, and $\epsilon=0.2$ is the clipping parameter.
+
+We augment this with KL regularization to the diffusion prior:
+\begin{equation}
+\mathcal{L}_{\text{total}}(\phi) = \mathcal{L}_{\text{PPO}}(\phi)
++ \beta(n) \cdot \mathbb{E}_{s \sim \mathcal{D}_{\text{buffer}}}
+\left[ D_{\text{KL}}(\pi_\phi(\cdot \mid s) \,\|\, p_\theta(\cdot \mid s)) \right]
+- \lambda_{\text{ent}} \mathcal{H}(\pi_\phi),
+\label{eq:total_loss}
+\end{equation}
+where:
+\begin{itemize}
+    \item $D_{\text{KL}}(\pi_\phi \| p_\theta)$ is the KL divergence from the RL
+    policy to the diffusion prior, encouraging the policy to stay close to expert
+    demonstrations early in training.
+
+    \item $\beta(n) = \beta_0 \cdot \gamma^{n}$ is a decaying coefficient
+    ($\beta_0=1.0$, $\gamma=0.995$ per epoch $n$), which gradually reduces prior
+    influence as the policy improves through exploration.
+
+    \item $\mathcal{H}(\pi_\phi)$ is the policy entropy for exploration, weighted
+    by $\lambda_{\text{ent}}=0.01$.
+\end{itemize}
+
+The value function is trained by minimizing the mean-squared Bellman error:
+\begin{equation}
+\mathcal{L}_{\text{value}}(\psi) = \mathbb{E}_{(s_t,R_t) \sim \mathcal{D}_{\text{buffer}}}
+\left[ (V_\psi(s_t) - R_t)^2 \right],
+\end{equation}
+where $R_t = \sum_{k=0}^{T-t-1} \gamma^k r_{t+k}$ is the discounted return
+($\gamma=0.99$).
+
+\subsubsection{Training Algorithm}
+
+The complete training procedure is outlined in Algorithm~\ref{alg:ppo_training}.
+At each iteration, we collect trajectories by rolling out the current policy
+$\pi_\phi$ in the CTMP environment (Algorithm~1), compute advantages using GAE,
+and update the policy and value networks via gradient descent on~\eqref{eq:total_loss}
+and~\eqref{eq:value_loss}.
+
+\begin{algorithm}[t]
+\caption{Prior-Guided PPO Training}
+\label{alg:ppo_training}
+\begin{algorithmic}[1]
+\STATE \textbf{Input:} Diffusion prior $p_\theta$, CTMP environment, $N_{\text{iter}}$ iterations
+\STATE \textbf{Output:} Trained policy $\pi_\phi^*$
+\STATE
+\STATE Initialize policy $\pi_\phi$, value function $V_\psi$ with random weights
+\FOR{iteration $n = 1, \ldots, N_{\text{iter}}$}
+    \STATE \textcolor{blue}{\# Collect rollouts}
+    \STATE $\mathcal{D}_{\text{buffer}} \gets \emptyset$
+    \FOR{episode $e = 1, \ldots, N_{\text{episodes}}$}
+        \STATE $s_0 \sim$ initial state distribution
+        \FOR{$t = 0, \ldots, T-1$}
+            \STATE $a_t \sim \pi_\phi(\cdot \mid s_t)$
+            \STATE $s_{t+1} \sim P(\cdot \mid s_t, a_t)$ \hfill $\triangleright$ CTMP simulation
+            \STATE $r_t \gets -(|I_t| + 10|D_t|)$
+            \STATE $\mathcal{D}_{\text{buffer}} \gets \mathcal{D}_{\text{buffer}} \cup \{(s_t, a_t, r_t)\}$
+        \ENDFOR
+    \ENDFOR
+    \STATE
+    \STATE \textcolor{blue}{\# Compute advantages}
+    \STATE Compute GAE advantages $\{\hat{A}_t\}$ using $V_\psi$
+    \STATE
+    \STATE \textcolor{blue}{\# Update policy with KL regularization}
+    \STATE $\beta \gets \beta_0 \cdot 0.995^n$
+    \FOR{PPO epoch $k = 1, \ldots, K_{\text{ppo}}$}
+        \STATE Sample mini-batch from $\mathcal{D}_{\text{buffer}}$
+        \STATE Update $\phi$ by gradient ascent on $\mathcal{L}_{\text{total}}(\phi)$ (Eq.~\ref{eq:total_loss})
+        \STATE Update $\psi$ by gradient descent on $\mathcal{L}_{\text{value}}(\psi)$
+    \ENDFOR
+\ENDFOR
+\RETURN $\pi_\phi$
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Comparison Baselines}
+
+To validate the effectiveness of the diffusion prior, we train three variants:
+\begin{enumerate}
+    \item \textbf{RL-only:} Standard PPO without prior ($\beta=0$ in Eq.~\ref{eq:total_loss}).
+    \item \textbf{BC+RL:} Behavior cloning warmstart (supervised learning on $\mathcal{D}$)
+    followed by PPO fine-tuning.
+    \item \textbf{Diffusion+RL (Ours):} Prior-guided PPO with diffusion model and
+    decaying KL regularization.
+\end{enumerate}
+Experimental comparisons are presented in Section~\ref{sec:experiments}.
+
+
+% ============================================
+\subsection{Implementation Details}
+\label{sec:implementation}
+
+All models are implemented in PyTorch. The CTMP simulator uses NumPy for efficient
+state updates and NetworkX for graph operations. Training is conducted on a single
+NVIDIA GPU (RTX 3090) with the following hyperparameters:
+
+\begin{itemize}
+    \item \textbf{Diffusion model:} $T_{\text{diff}}=1000$, $d_{\text{model}}=128$,
+    4 Transformer layers, learning rate $3 \times 10^{-4}$, 50 epochs.
+    \item \textbf{PPO:} Learning rate $3 \times 10^{-4}$, $N_{\text{episodes}}=10$
+    per iteration, $K_{\text{ppo}}=10$ optimization epochs, GAE $\lambda=0.95$,
+    discount $\gamma=0.99$, clip $\epsilon=0.2$.
+    \item \textbf{KL regularization:} $\beta_0=1.0$, decay $\gamma=0.995$ per iteration.
+\end{itemize}
+
+Training RL-only requires $\sim 200$ iterations ($\approx 2000$ episodes) to converge,
+taking approximately 12 hours. Diffusion+RL converges in $\sim 100$ iterations
+($\approx 1000$ episodes, 6 hours), demonstrating improved sample efficiency.
